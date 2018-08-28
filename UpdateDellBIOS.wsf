@@ -1,0 +1,213 @@
+<job id="UpdateDellBIOS"> 
+<script language="VBScript" src="..\..\scripts\ZTIUtility.vbs"/> 
+<script language="VBScript"> 
+  
+' //*************************************************************************** 
+' // ***** Script Header ***** 
+' // 
+' // UpdateDellBIOS.wsf
+' //
+' // File:      UpdateDellBIOS.wsf
+' // 
+' // Modified:	Mark Hardy, CompuCom Systems, Inc
+' // 
+' // 
+' // Purpose:	Determine hardware model and apply BIOS update
+' // 		
+' // 		Customized for use by Suez WTS
+' // 
+' // Deps:	ZTIUtility.vbs
+' // 
+' // ***** End Header ***** 
+' //*************************************************************************** 
+  
+'//---------------------------------------------------------------------------- 
+'// 
+'// Global constant and variable declarations 
+'// 
+'//---------------------------------------------------------------------------- 
+  
+'Option Explicit 
+  
+Dim iRetVal 
+  
+'//---------------------------------------------------------------------------- 
+'// End declarations 
+'//---------------------------------------------------------------------------- 
+  
+'//---------------------------------------------------------------------------- 
+'// Main routine 
+'//---------------------------------------------------------------------------- 
+  
+On Error Resume Next 
+
+Dim objShell,objWMIService, objFSO, strPath, strScriptPath, strBIOSPwd, strBIOSLogFile, Debug, strDellBIOSUpdatePath
+
+Set objShell = WScript.CreateObject("WScript.Shell")
+Set objWMIService = GetObject("winmgmts:{impersonationLevel=impersonate}!\\.\root\cimv2")
+Set objFSO = CreateObject("Scripting.FileSystemObject")
+
+
+
+'set objReg = getObject( "Winmgmts:root\default:StdRegProv" )
+' 
+'Set objNet = CreateObject( "WScript.Network" )
+
+Debug = False
+strPath = objShell.CurrentDirectory
+strScriptPath = Wscript.ScriptFullName
+strDellBIOSUPdatePath = "C:\Utility\Packages\DellBIOSUpdate"
+strBIOSPwdFile = strPath & "\BIOS.txt"
+strBIOSLogFile = "C:\Utility\Packages\Logs\BIOSUpdate.log"
+
+iRetVal = ZTIProcess 
+ProcessResults iRetVal 
+On Error Goto 0 
+  
+'//--------------------------------------------------------------------------- 
+'// 
+'// Function: ZTIProcess() 
+'// 
+'// Input: None 
+'// 
+'// Return: Success - 0 
+'// Failure - non-zero 
+'// 
+'// Purpose: Perform main ZTI processing 
+'// 
+'//--------------------------------------------------------------------------- 
+Function ZTIProcess() 
+  
+	iRetVal = Success 
+
+	ZTIProcess = iRetval
+	oLogging.CreateEntry "UpdateDellBIOS: Begin ZTIProcess", LogTypeInfo
+
+	
+	Set colBIOS = objWMIService.ExecQuery("SELECT * FROM Win32_ComputerSystem")
+	Found = false
+	For Each objItem in colBIOS
+		strModel = objItem.Model
+		strManuf = objItem.Manufacturer	
+		found = True
+	Next
+	If Found then
+		oLogging.CreateEntry "UpdateDellBIOS: Hardware Model = " & strModel, LogTypeInfo
+	Else
+		oLogging.CreateEntry "UpdateDellBIOS: Unable to retrieve hardware model from BIOS", LogTypeInfo
+		wscript.quit
+	End if
+	
+	If objFSO.fileexists(strBIOSPwdFile) Then
+		'Found bios.txt file
+		oLogging.CreateEntry "UpdateDellBIOS: Found BIOS.txt file in folder, reading " & strBIOSPwdFile, LogTypeInfo
+		Set objBIOSPWDFile = objFSO.OpenTextFile(strBIOSPwdFile)
+			Do Until objBIOSPWDFile.AtEndOfStream
+				strBIOSPwd = objBIOSPWDFile.ReadLine
+			Loop
+		objBIOSPWDFile.Close
+		Password = True
+
+	Else
+		oLogging.CreateEntry "Did not find BIOS.txt file in folder, BIOS will not be secured", LogTypeInfo
+		Password = False
+	End if
+	
+	strBIOSPath = strPath & "\" & strModel
+	
+	If objFSO.FolderExists(strBIOSPath) Then
+		'We have a folder for this hardware model, copy BIOS update to local drive
+		'Get the name of the BIOS Update file
+		Set objFolder = objFSO.GetFolder(strBIOSPath)
+		Set colFiles = objFolder.Files
+		For Each objFile in colFiles
+	
+		    strBIOSFileName = objFile.Name
+		
+		Next
+		oLogging.CreateEntry "UpdateDellBIOS: BIOS Update file " & strBIOSFileName & " will be used", LogTypeInfo
+		
+		oLogging.CreateEntry "UpdateDellBIOS: Copying BIOS update file " & strBIOSFileName & " from " & strBIOSPath & " to " & strDellBIOSUPdatePath, LogTypeInfo
+		
+		strPasstext = strDellBIOSUPdatePath
+		RC = MakeSureDirectoryTreeExists(strPasstext)
+		objFSO.CopyFile strBIOSPath & "\" & strBIOSFileName, strDellBIOSUPdatePath & "\"
+		strBIOSFile = strDellBIOSUPdatePath & "\" & strBIOSFileName
+		oLogging.CreateEntry "UpdateDellBIOS: Copying Flash64W.EXE from " & strBIOSPath & " to " & strDellBIOSUPdatePath, LogTypeInfo
+		objFSO.CopyFile strPath & "\Flash64W.exe", strDellBIOSUPdatePath & "\"
+		
+	Else
+		'No folder for this hardware model, we can't update BIOS
+		oEnvironment.Item("BIOSUpdateResult") = "Failed"
+		wscript.quit
+	End if
+	
+	If Password then
+		cmdline = strDellBIOSUPdatePath & "\Flash64w.exe" & _
+			" /b=" & strBIOSFile & _
+			" /s /f" &_
+			" /p=" & strBIOSPwd & _
+			" /l=" & strBIOSLogFile
+	Else
+		cmdline = strDellBIOSUPdatePath & "\Flash64w.exe" & _
+			" /b=" & strBIOSFile & _
+			" /s" &_
+			" /l=" & strBIOSLogFile	
+	End if
+	If Debug then oLogging.CreateEntry "UpdateDellBIOS: Update Command Line = " & cmdline, LogTypeInfo
+	
+	oLogging.CreateEntry "UpdateDellBIOS: Updating BIOS", LogTypeInfo
+	objShell.CurrentDirectory = strDellBIOSUPdatePath
+	If Debug then 
+		RC = 0
+		oLogging.CreateEntry "UpdateDellBIOS: DEBUG MODE - NOT RUNNING BIOS UPDATE, we'll run Notepad instead", LogTypeInfo
+		
+		RC = objShell.Run("notepad.exe", 1, true)
+	Else
+		RC = objShell.Run(cmdline, 1, true)
+	End if
+	oLogging.CreateEntry "UpdateDellBIOS: BIOS Update returned " & RC, LogTypeInfo
+	if RC = 0 then
+		oEnvironment.Item("BIOSUpdateResult") = "Succeeded"
+	Else
+		oEnvironment.Item("BIOSUpdateResult") = "Failed"
+	End if
+End Function 
+
+Function MakeSureDirectoryTreeExists(dirName)
+	'This function accepts a directory name and checks if it exists. 
+	'If it doesn't exist, it creates the full directory path.
+	on error resume next
+	Dim aFolders, newFolder
+	dim delim
+	' Checks the folder's existence.
+	If Not objFSO.FolderExists(dirName) Then
+		' Splits the various components of the folder name.
+		If instr(dirname,"\\") then
+			delim = "-_-_-_-"
+			dirname = replace(dirname,"\\",delim)
+		End if
+		aFolders = split(dirName, "\")
+
+		If InStr(dirname,delim) Then
+			dirname = replace(aFolders(0),delim,"\\")
+		End if
+
+		' Obtains the drive's root folder.
+		newFolder = objFSO.BuildPath(dirname, "\")
+		' Scans each component in the array, and create the appropriate folder.
+		For i=1 to UBound(aFolders)
+
+			newFolder = objFSO.BuildPath(newFolder, aFolders(i))
+
+			If Not objFSO.FolderExists(newFolder) Then
+				objFSO.CreateFolder newFolder
+			End If
+		Next
+	 End If
+End Function 
+
+
+
+</script> 
+</job> 
